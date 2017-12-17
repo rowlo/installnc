@@ -1,7 +1,7 @@
 # installnc
-A script that automizes installation of nextcloud on (k)ubuntu 16.04 LTS running in VirtualBox guest
+A script that automates installation of nextcloud on (k)ubuntu 16.04 LTS running in a VirtualBox guest.
 
-Bash install script for nextcloud server in VirtualBox guest with letsencrypt SSL and nginx as subdir in dyndns domain and nextcloud_data dir linked to a shared folder.
+It's a bash script for installing a nextcloud server in a VirtualBox guest with letsencrypt SSL and nginx as subdir in dyndns domain and nextcloud_data dir linked to a shared folder.
 The script follows the description provided with that **awesome guide** [German]:
 [Nextcloud auf Ubuntu Server mit nginx, MariaDB, PHP, Let’s Encrypt, Redis und Fail2ban](https://decatec.de/home-server/nextcloud-auf-ubuntu-server-mit-nginx-mariadb-php-lets-encrypt-redis-und-fail2ban/ "Nextcloud auf Ubuntu Server mit nginx, MariaDB, PHP, Let’s Encrypt, Redis und Fail2ban")
 
