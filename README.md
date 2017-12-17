@@ -16,9 +16,9 @@ Additionally it also utilizes
 
 ## Usage:
 1. Modify the top three variables of the install_nc.sh script to match your needs:
-  VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA="cloud-data"
-  MOUNTPOINTVBOXFS="/media/sfclouddata"
-  SERVER_DOMAIN_NAME="your-dyndns-domain.com"
+   - VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA="cloud-data"
+   - MOUNTPOINTVBOXFS="/media/sfclouddata"
+   - SERVER_DOMAIN_NAME="your-dyndns-domain.com"
 2. Prepare a shared folder for your cloud data. If you like, put it in an encrypted container and mount it, e.g. "/media/truecrypt2/cloud-data/nextcloud_data/"
   In the example truecrypt2 is an ext4 file container, "cloud-data" is the shared folder , and "nextcloud_data" is the nextcloud data folder with changable permissions from within the guest.
 3. In VirtualBox create a guest from a kubuntu 16.04 LTS iso and configure the shared folder. Stick to "cloud_data" if you like.
