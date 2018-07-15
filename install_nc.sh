@@ -375,6 +375,8 @@ function install_letsencrypt {
     # using anacron as it doen't require the system to be running
     # at the exact time when the renew is scheduled
     ANACRON_LETSENCRYPT_RENEW="/etc/cron.monthly/letsencrypt-renew"
+    echo "#!/bin/sh" >> "${ANACRON_LETSENCRYPT_RENEW}"
+    echo "date >> /var/log/letsencrypt-renew.log" >> "${ANACRON_LETSENCRYPT_RENEW}"
     echo "letsencrypt renew >> /var/log/letsencrypt-renew.log && service nginx restart > /dev/null 2>&1" >> "${ANACRON_LETSENCRYPT_RENEW}"
     chmod ugo+x "${ANACRON_LETSENCRYPT_RENEW}"
     echo "Changes to ${ANACRON_LETSENCRYPT_RENEW}"
