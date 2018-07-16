@@ -1,0 +1,6 @@
+2018-07-16:
+- Fixed severe bug: Data folder was not the shared folder from VirtualBox but a VM internal folder. That potentially flooded the VM disk to its limit.
+- Adapted script for Kubuntu 18.04 LTS
+
+Initial Version:
+- Combined German guideline and other online sources into own install script for setting up an nextcloud VM with Kubuntu 16.04 LTS behind nginx for private use with dyndns

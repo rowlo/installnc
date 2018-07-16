@@ -1,11 +1,14 @@
 #!/bin/bash
-# Bash install script for nextcloud server in VirtualBox guest with SSL and nginx as subdir in dyndns domain and nextcloud_data dir linked to a shared folder.
+# Bash install script for nextcloud server in VirtualBox guest with SSL and 
+# nginx as subdir in dyndns domain and nextcloud_data dir linked to a shared folder.
+#
 # The script follows the description on that awesome guide:
 # https://decatec.de/home-server/nextcloud-auf-ubuntu-server-mit-nginx-mariadb-php-lets-encrypt-redis-und-fail2ban/
 # But it also utilizes
 # https://unix.stackexchange.com/a/345518
 # https://unix.stackexchange.com/questions/335609/how-to-mount-shared-folder-from-virtualbox-at-boot-time-in-debian
 # https://www.freedesktop.org/software/systemd/man/systemd.mount.html
+#
 # Original author of that script: Robert Wloch (robert@rowlo.de)
 
 SERVER_DOMAIN_NAME="your-dyndns-domain.com"
@@ -13,12 +16,13 @@ SERVER_DOMAIN_NAME="your-dyndns-domain.com"
 VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA="cloud-data"
 MOUNTPOINTVBOXFS="/media/sfclouddata"
 
+PHP_VERSION="7.2"
 NGINX_GATEWAY_CONFFILE="/etc/nginx/conf.d/${SERVER_DOMAIN_NAME}.conf"
 NGINX_LETSENCRYPT_CONFFILE="/etc/nginx/conf.d/${SERVER_DOMAIN_NAME}_letsencrypt.conf"
 NGINX_NEXTCLOUD_CONFFILE="/etc/nginx/conf.d/${SERVER_DOMAIN_NAME}_nextcloud.conf"
 
 CURRENT_DIR=`pwd`
-SCRIPT_DIR=`dirname "${0}"`
+SCRIPT_DIR=`dirname "$(realpath $0)"`
 SCRIPT=`basename "$0"`
 
 DISTRIBUTION_CODENAME=`cat /etc/lsb-release | grep DISTRIB_CODENAME | cut -d = -f 2`
@@ -40,7 +44,7 @@ function update_vim_dkms_ssh {
     echo "Update the system and install basic tools..."
     apt-get -yq update && apt-get -yq upgrade -V && apt-get -yq dist-upgrade && apt-get -yq autoremove
     echo "Install vim, dkms (needed for Virtual Box), openssh-server..."
-    apt-get -yq install vim dkms openssh-server openssl-blacklist openssl-blacklist-extra
+    apt-get -yq install vim dkms openssh-server
     
     echo "Now copy pub ssh key to that server and test that ssh login works without password. To copy the key use:"
     echo "ssh-copy-id ${SUDO_USER}@${HOSTNAME}"
@@ -106,7 +110,7 @@ After=vboxadd-service.service
 What=${VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA}
 Where=${MOUNTPOINTVBOXFS}
 Type=vboxsf
-Options=umask=0007,uid=${WWWDATA_UID},gui=${WWWDATA_GID}
+Options=umask=0007,uid=${WWWDATA_UID},gid=${WWWDATA_GID}
 
 [Install]
 WantedBy = multi-user.target
@@ -114,7 +118,7 @@ WantedBy = multi-user.target
     systemctl enable ${SYSTEMD_MOUNT_UNIT_NAME}
 
     read -p "Please insert the VirtualBox GuestAddtions and mount the drive now. When ready, press any key to continue..."
-    VBOXADDITIONS=`ls /media/${SUDO_USER}/ | grep VBOXADDITIONS`
+    VBOXADDITIONS=`ls /media/${SUDO_USER}/ | grep VBox_GAs`
     cd /media/${SUDO_USER}/${VBOXADDITIONS}
     ./VBoxLinuxAdditions.run
 
@@ -165,7 +169,11 @@ function install_php {
     fi
     echo "Step: ${FUNCNAME[0]}"
 
-    apt-get -yq install php7.0-fpm php7.0-gd php7.0-mysql php7.0-curl php7.0-xml php7.0-zip php7.0-intl php7.0-mcrypt php7.0-mbstring php7.0-bz2 php-apcu
+    apt-get -yq install php${PHP_VERSION}-fpm php${PHP_VERSION}-gd php${PHP_VERSION}-mysql php${PHP_VERSION}-curl php${PHP_VERSION}-xml php${PHP_VERSION}-zip php${PHP_VERSION}-intl php${PHP_VERSION}-mbstring php${PHP_VERSION}-bz2 php-apcu
+    # https://github.com/s3inlc/hashtopolis/issues/373
+    apt-get -yq install libmcrypt-dev php${PHP_VERSION}-dev
+    read -p "The following build will prompt for a libmcrypt prefix. Just press enter and go with the default."
+    pecl install mcrypt-1.0.1
 
     cd "${SCRIPT_DIR}"
     touch FINISHED.${SCRIPT}.${FUNCNAME[0]}
@@ -181,7 +189,7 @@ function configure_php {
     echo "Step: ${FUNCNAME[0]}"
 
     # make sure www-data is user and group in php's www.conf
-    WWW_CONF="/etc/php/7.0/fpm/pool.d/www.conf"
+    WWW_CONF="/etc/php/${PHP_VERSION}/fpm/pool.d/www.conf"
     if [ ! -f "${WWW_CONF}.original" ]; then
         cp "${WWW_CONF}" "${WWW_CONF}.original"
     else
@@ -190,14 +198,14 @@ function configure_php {
     sed -i -e '/^user =/c\user = www-data' "${WWW_CONF}"
     sed -i -e '/^group =/c\group = www-data' "${WWW_CONF}"
     # enable socket configuration
-    sed -i -e '/^listen =/c\listen = \/run\/php\/php7.0-fpm.sock' "${WWW_CONF}"
+    sed -i -e '/^listen =/c\listen = \/run\/php\/php${PHP_VERSION}-fpm.sock' "${WWW_CONF}"
     # enable env entries (required by nextcloud
     sed -i -e 's/;env\[/env\[/g' "${WWW_CONF}"
     echo "Changes to ${WWW_CONF}"
     diff "${WWW_CONF}.original" "${WWW_CONF}" | grep -e '^>'
 
     # change global php settings
-    PHP_INI="/etc/php/7.0/fpm/php.ini"
+    PHP_INI="/etc/php/${PHP_VERSION}/fpm/php.ini"
     if [ ! -f "${PHP_INI}.original" ]; then
         cp "${PHP_INI}" "${PHP_INI}.original"
     else
@@ -221,11 +229,12 @@ function configure_php {
     sed -i -e '/^opcache.revalidate_freq=/c\opcache.revalidate_freq = 1' "${PHP_INI}"
     sed -i -e '/^;opcache.save_comments=/c\opcache.save_comments = 1' "${PHP_INI}"
     sed -i -e '/^opcache.save_comments=/c\opcache.save_comments = 1' "${PHP_INI}"
+    sed -i -e '/^;extension=xsl/c\;extension=xsl\nextension=mcrypt.so' "${PHP_INI}"
     echo "Changes to ${PHP_INI}"
     diff "${PHP_INI}.original" "${PHP_INI}" | grep -e '^>'
 
     # prepare chron job
-    CLI_PHP_INI="/etc/php/7.0/cli/php.ini"
+    CLI_PHP_INI="/etc/php/${PHP_VERSION}/cli/php.ini"
     if [ ! -f "${CLI_PHP_INI}.original" ]; then
         cp "${CLI_PHP_INI}" "${CLI_PHP_INI}.original"
     else
@@ -238,7 +247,7 @@ function configure_php {
     echo "Changes to ${CLI_PHP_INI}"
     diff "${CLI_PHP_INI}.original" "${CLI_PHP_INI}" | grep -e '^>'
 
-    service php7.0-fpm restart
+    service php${PHP_VERSION}-fpm restart
     cd "${SCRIPT_DIR}"
     touch FINISHED.${SCRIPT}.${FUNCNAME[0]}
 }
@@ -271,7 +280,7 @@ function configure_nginx {
     echo "Step: ${FUNCNAME[0]}"
 
     # modify global configuration
-    NGINX_CONF="etc/nginx/nginx.conf"
+    NGINX_CONF="/etc/nginx/nginx.conf"
     if [ ! -f "${NGINX_CONF}.original" ]; then
         cp "${NGINX_CONF}" "${NGINX_CONF}.original"
     else
@@ -312,33 +321,33 @@ function configure_nginx {
 
     if [ ! -f "${NGINX_GATEWAY_CONFFILE}" ]; then
         touch "${NGINX_GATEWAY_CONFFILE}"
-        echo "server {" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "  listen 80 default_server;" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "  server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP} ${HOSTNAME};" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "  root /var/www;" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "  location ^~ /.well-known/acme-challenge {" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "      proxy_pass http://127.0.0.1:81;" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "      proxy_redirect off;" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "  }" >> "${NGINX_GATEWAY_CONFFILE}"
-        echo "}" >> "${NGINX_GATEWAY_CONFFILE}"
-        
+        echo "server {
+  listen 80 default_server;
+  server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP} ${HOSTNAME};
+
+  root /var/www;
+
+  location ^~ /.well-known/acme-challenge {
+      proxy_pass http://127.0.0.1:81;
+      proxy_redirect off;
+  }
+}" >> "${NGINX_GATEWAY_CONFFILE}"
+
         echo "Changes to ${NGINX_GATEWAY_CONFFILE}"
         cat "${NGINX_GATEWAY_CONFFILE}"
     fi
 
     if [ ! -f "${NGINX_LETSENCRYPT_CONFFILE}" ]; then
         touch "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "server {" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "  listen 127.0.0.1:81;" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "  server_name 127.0.0.1;" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "  location ^~ /.well-known/acme-challenge {" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "      default_type text/plain;" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "      root /var/www/letsencrypt;" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "  }" >> "${NGINX_LETSENCRYPT_CONFFILE}"
-        echo "}" >> "${NGINX_LETSENCRYPT_CONFFILE}"
+        echo "server {
+  listen 127.0.0.1:81;
+  server_name 127.0.0.1;
+
+  location ^~ /.well-known/acme-challenge {
+      default_type text/plain;
+      root /var/www/letsencrypt;
+  }
+}" >> "${NGINX_LETSENCRYPT_CONFFILE}"
         
         echo "Changes to ${NGINX_LETSENCRYPT_CONFFILE}"
         cat "${NGINX_LETSENCRYPT_CONFFILE}"
@@ -375,9 +384,9 @@ function install_letsencrypt {
     # using anacron as it doen't require the system to be running
     # at the exact time when the renew is scheduled
     ANACRON_LETSENCRYPT_RENEW="/etc/cron.monthly/letsencrypt-renew"
-    echo "#!/bin/sh" >> "${ANACRON_LETSENCRYPT_RENEW}"
-    echo "date >> /var/log/letsencrypt-renew.log" >> "${ANACRON_LETSENCRYPT_RENEW}"
-    echo "letsencrypt renew >> /var/log/letsencrypt-renew.log && service nginx restart > /dev/null 2>&1" >> "${ANACRON_LETSENCRYPT_RENEW}"
+    echo "#!/bin/sh
+date >> /var/log/letsencrypt-renew.log
+letsencrypt renew >> /var/log/letsencrypt-renew.log && service nginx restart > /dev/null 2>&1" >> "${ANACRON_LETSENCRYPT_RENEW}"
     chmod ugo+x "${ANACRON_LETSENCRYPT_RENEW}"
     echo "Changes to ${ANACRON_LETSENCRYPT_RENEW}"
     cat "${ANACRON_LETSENCRYPT_RENEW}"
@@ -396,252 +405,252 @@ function configure_nginx_nextcloud {
     echo "Step: ${FUNCNAME[0]}"
 
     # same as in step configure_nginx
-    echo "server {" > "${NGINX_GATEWAY_CONFFILE}"
-    echo "  listen 80 default_server;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP} ${HOSTNAME};" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  root /var/www;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  location ^~ /.well-known/acme-challenge {" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_pass http://127.0.0.1:81;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_redirect off;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  }" >> "${NGINX_GATEWAY_CONFFILE}"
+    echo "server {
+  listen 80 default_server;
+  server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP} ${HOSTNAME};
+
+  root /var/www;
+
+  location ^~ /.well-known/acme-challenge {
+      proxy_pass http://127.0.0.1:81;
+      proxy_redirect off;
+  }
     # now changes for nextcloud
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  location / {" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # Enforce HTTPS" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # use this if you always want to redirect to the DynDNS address (no local access)." >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      return 301 https://\$server_name\$request_uri;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      #Use this if you also want to access the server by local IP:" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      #return 301 https://\$server_adr\$request_uri;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  }" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "}" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "server {" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  listen 443 ssl http2;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP};" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Configure SSL" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl on;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Certificates used" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_certificate /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/fullchain.pem;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_certificate_key /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/privkey.pem;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Not using TLSv1 will break:" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #   Android <= 4.4.40" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #   IE <= 10" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #   IE mobile <= 10" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Removing TLSv1.1 breaks nothing else!" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_protocols TLSv1.2;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Using the recommended cipher suite from: https://wiki.mozilla.org/Security/Server_Side_TLS" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_ciphers 'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!3DES:!MD5:!PSK';" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Diffie-Hellman parameter for DHE ciphersuites, recommended 2048 bits" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_dhparam /etc/nginx/ssl/dhparams.pem;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Specifies a curve for ECDHE ciphers." >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # High security, but will not work with Chrome:" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #ssl_ecdh_curve secp521r1;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Works with Windows (Mobile), but not with Android (DavDroid):" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #ssl_ecdh_curve secp384r1;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Works with Android (DavDroid):" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_ecdh_curve prime256v1;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Server should determine the ciphers, not the client" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_prefer_server_ciphers on;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # OCSP Stapling" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # fetch OCSP records from URL in ssl_certificate and cache them" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_stapling on;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_stapling_verify on;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_trusted_certificate /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/fullchain.pem;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  resolver ${LOCAL_GATEWAY};" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # SSL session handling" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_session_timeout 24h;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_session_cache shared:SSL:50m;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  ssl_session_tickets off;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Add headers to serve security related headers" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #  " >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # HSTS (ngx_http_headers_module is required)" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # In order to be recoginzed by SSL test, there must be an index.hmtl in the server's root" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header Strict-Transport-Security \"max-age=63072000; includeSubdomains\" always;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header X-Content-Type-Options \"nosniff\" always;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Usually this should be \"DENY\", but when hosting sites using frames, it has to be \"SAMEORIGIN\"" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header Referrer-Policy \"same-origin\" always;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header X-XSS-Protection \"1; mode=block\" always;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header X-Robots-Tag none;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header X-Download-Options noopen;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  add_header X-Permitted-Cross-Domain-Policies none;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  location = / {" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # Disable access to the web root, the Nextcloud subdir should be used instead." >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      deny all;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # If you want to be able to access the cloud using the webroot only, use the following command instead:" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # rewrite ^ /nextcloud;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  }" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  # Nextcloud" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  #" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  location ^~ /nextcloud {" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # Set max. size of a request (important for uploads to Nextcloud)" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      client_max_body_size 10G;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      # Besides the timeout values have to be raised in nginx' Nextcloud config, these values have to be raised for the proxy as well" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_connect_timeout 3600;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_send_timeout 3600;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_read_timeout 3600;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      send_timeout 3600;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_buffering off;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_max_temp_file_size 10240m;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_set_header Host \$host;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_set_header X-Real-IP \$remote_addr;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_pass http://127.0.0.1:82;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "      proxy_redirect off;" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "  }" >> "${NGINX_GATEWAY_CONFFILE}"
-    echo "}" >> "${NGINX_GATEWAY_CONFFILE}"
+
+  location / {
+      # Enforce HTTPS
+      # use this if you always want to redirect to the DynDNS address (no local access).
+      return 301 https://\$server_name\$request_uri;
+
+      #Use this if you also want to access the server by local IP:
+      #return 301 https://\$server_adr\$request_uri;
+  }
+}
+
+server {
+  listen 443 ssl http2;
+  server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP};
+
+  #
+  # Configure SSL
+  #
+  ssl on;
+
+  # Certificates used
+  ssl_certificate /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/privkey.pem;
+
+  # Not using TLSv1 will break:
+  #   Android <= 4.4.40
+  #   IE <= 10
+  #   IE mobile <= 10
+  # Removing TLSv1.1 breaks nothing else!
+  ssl_protocols TLSv1.2;
+
+  # Using the recommended cipher suite from: https://wiki.mozilla.org/Security/Server_Side_TLS
+  ssl_ciphers 'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!3DES:!MD5:!PSK';
+
+  # Diffie-Hellman parameter for DHE ciphersuites, recommended 2048 bits
+  ssl_dhparam /etc/nginx/ssl/dhparams.pem;
+
+  # Specifies a curve for ECDHE ciphers.
+  # High security, but will not work with Chrome:
+  #ssl_ecdh_curve secp521r1;
+  # Works with Windows (Mobile), but not with Android (DavDroid):
+  #ssl_ecdh_curve secp384r1;
+  # Works with Android (DavDroid):
+  ssl_ecdh_curve prime256v1;
+
+  # Server should determine the ciphers, not the client
+  ssl_prefer_server_ciphers on;
+
+  # OCSP Stapling
+  # fetch OCSP records from URL in ssl_certificate and cache them
+  ssl_stapling on;
+  ssl_stapling_verify on;
+  ssl_trusted_certificate /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/fullchain.pem;
+  resolver ${LOCAL_GATEWAY};
+
+  # SSL session handling
+  ssl_session_timeout 24h;
+  ssl_session_cache shared:SSL:50m;
+  ssl_session_tickets off;
+
+  #
+  # Add headers to serve security related headers
+  #
+  # HSTS (ngx_http_headers_module is required)
+  # In order to be recoginzed by SSL test, there must be an index.hmtl in the server's root
+  add_header Strict-Transport-Security \"max-age=63072000; includeSubdomains\" always;
+  add_header X-Content-Type-Options \"nosniff\" always;
+  # Usually this should be \"DENY\", but when hosting sites using frames, it has to be \"SAMEORIGIN\"
+  add_header Referrer-Policy \"same-origin\" always;
+  add_header X-XSS-Protection \"1; mode=block\" always;
+  add_header X-Robots-Tag none;
+  add_header X-Download-Options noopen;
+  add_header X-Permitted-Cross-Domain-Policies none;
+
+  location = / {
+      # Disable access to the web root, the Nextcloud subdir should be used instead.
+      deny all;
+
+      # If you want to be able to access the cloud using the webroot only, use the following command instead:
+      # rewrite ^ /nextcloud;
+  }
+
+  #
+  # Nextcloud
+  #
+  location ^~ /nextcloud {
+      # Set max. size of a request (important for uploads to Nextcloud)
+      client_max_body_size 10G;
+      # Besides the timeout values have to be raised in nginx' Nextcloud config, these values have to be raised for the proxy as well
+      proxy_connect_timeout 3600;
+      proxy_send_timeout 3600;
+      proxy_read_timeout 3600;
+      send_timeout 3600;
+      proxy_buffering off;
+      proxy_max_temp_file_size 10240m;
+      proxy_set_header Host \$host;
+      proxy_set_header X-Real-IP \$remote_addr;
+      proxy_pass http://127.0.0.1:82;
+      proxy_redirect off;
+  }
+}" > "${NGINX_GATEWAY_CONFFILE}"
     echo "Changes to ${NGINX_GATEWAY_CONFFILE}"
     cat "${NGINX_GATEWAY_CONFFILE}"
 
-    echo "upstream php-handler {" > "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  server unix:/run/php/php7.0-fpm.sock;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "}" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "server {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  listen 82;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  server_name 127.0.0.1;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  # Add headers to serve security related headers" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  # Use 'proxy_set_header' (not 'add_header') as the headers have to be passed through a proxy." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  proxy_set_header Strict-Transport-Security \"max-age=15768000; includeSubDomains; always;\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  proxy_set_header X-Content-Type-Options \"nosniff; always;\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  proxy_set_header X-XSS-Protection \"1; mode=block; always;\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  proxy_set_header X-Robots-Tag none;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  proxy_set_header X-Download-Options noopen;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  proxy_set_header X-Permitted-Cross-Domain-Policies none;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  # Path to the root of your installation" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  root /var/www/;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  location = /robots.txt {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      allow all;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      log_not_found off;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      access_log off;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  # The following 2 rules are only needed for the user_webfinger app." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  # Uncomment it if you're planning to use this app." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  #rewrite ^/.well-known/host-meta /nextcloud/public.php?service=host-meta last;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  #rewrite ^/.well-known/host-meta.json /nextcloud/public.php?service=host-meta-json last;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  location = /.well-known/carddav { " >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      return 301 \$scheme://\$host/nextcloud/remote.php/dav;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  location = /.well-known/caldav { " >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      return 301 \$scheme://\$host/nextcloud/remote.php/dav;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  location /.well-known/acme-challenge { }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  location ^~ /nextcloud {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      # set max upload size" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      client_max_body_size 10G;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      fastcgi_buffers 64 4K;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      # Enable gzip but do not remove ETag headers" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      gzip on;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      gzip_vary on;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      gzip_comp_level 4;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      gzip_min_length 256;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      gzip_proxied expired no-cache no-store private no_last_modified no_etag auth;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      # Uncomment if your server is build with the ngx_pagespeed module" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      # This module is currently not supported." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      #pagespeed off;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location /nextcloud {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          rewrite ^ /nextcloud/index.php\$uri;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location ~ ^/nextcloud/(?:build|tests|config|lib|3rdparty|templates|data)/ {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          deny all;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location ~ ^/nextcloud/(?:\.|autotest|occ|issue|indie|db_|console) {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          deny all;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location ~ ^/nextcloud/(?:index|remote|public|cron|core/ajax/update|status|ocs/v[12]|updater/.+|ocs-provider/.+|core/templates/40[34])\.php(?:\$|/) {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          include fastcgi_params;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_split_path_info ^(.+\.php)(/.+)\$;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_param PATH_INFO \$fastcgi_path_info;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Avoid sending the security headers twice" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_param modHeadersAvailable true;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_param front_controller_active true;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_pass php-handler;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_intercept_errors on;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Raise timeout values." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # This is especially important when the Nextcloud setup runs into timeouts (504 gateway errors)" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_read_timeout 600;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_send_timeout 600;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_connect_timeout 600;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_request_buffering off;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Pass PHP variables directly to PHP." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # This is usually done in the php.ini. For more flexibility, these variables are configured in the nginx config." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # All the PHP parameters have to be set in one fastcgi_param. When using more 'fastcgi_param PHP_VALUE' directives, the last one will override all the others." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_param PHP_VALUE \"open_basedir=/var/www:/tmp/:/var/nextcloud_data:/dev/urandom:/proc/meminfo" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          upload_max_filesize = 10G" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          post_max_size = 10G" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          max_execution_time = 3600" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          output_buffering = off\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Make sure that the real IP of the remote host is passed to PHP." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          fastcgi_param REMOTE_ADDR \$http_x_real_ip;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location ~ ^/nextloud/(?:updater|ocs-provider)(?:\$|/) {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          try_files \$uri/ =404;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          index index.php;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      # Adding the cache control header for js and css files" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      # Make sure it is BELOW the PHP block" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location ~* \.(?:css|js)\$ {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          try_files \$uri /nextcloud/index.php\$uri\$is_args\$args;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header Cache-Control \"public, max-age=7200\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Add headers to serve security related headers" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Again use 'proxy_set_header' (not 'add_header') as the headers have to be passed through a proxy." >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header Strict-Transport-Security \"max-age=15768000; includeSubDomains; preload;\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header X-Content-Type-Options nosniff;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          #proxy_set_header X-Frame-Options \"SAMEORIGIN\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header X-XSS-Protection \"1; mode=block\";" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header X-Robots-Tag none;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header X-Download-Options noopen;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          proxy_set_header X-Permitted-Cross-Domain-Policies none;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Optional: Don't log access to assets" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          access_log off;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      location ~* \.(?:svg|gif|png|html|ttf|woff|ico|jpg|jpeg)\$ {" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          try_files \$uri /nextcloud/index.php\$uri\$is_args\$args;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          # Optional: Don't log access to other assets" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "          access_log off;" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "      }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "  }" >> "${NGINX_NEXTCLOUD_CONFFILE}"
-    echo "}" >> "${NGINX_NEXTCLOUD_CONFFILE}"
+    echo "upstream php-handler {
+  server unix:/run/php/php${PHP_VERSION}-fpm.sock;
+}
+
+server {
+  listen 82;
+  server_name 127.0.0.1;
+
+  # Add headers to serve security related headers
+  # Use 'proxy_set_header' (not 'add_header') as the headers have to be passed through a proxy.
+  proxy_set_header Strict-Transport-Security \"max-age=15768000; includeSubDomains; always;\";
+  proxy_set_header X-Content-Type-Options \"nosniff; always;\";
+  proxy_set_header X-XSS-Protection \"1; mode=block; always;\";
+  proxy_set_header X-Robots-Tag none;
+  proxy_set_header X-Download-Options noopen;
+  proxy_set_header X-Permitted-Cross-Domain-Policies none;
+
+  # Path to the root of your installation
+  root /var/www/;
+
+  location = /robots.txt {
+      allow all;
+      log_not_found off;
+      access_log off;
+  }
+
+  # The following 2 rules are only needed for the user_webfinger app.
+  # Uncomment it if you're planning to use this app.
+  #rewrite ^/.well-known/host-meta /nextcloud/public.php?service=host-meta last;
+  #rewrite ^/.well-known/host-meta.json /nextcloud/public.php?service=host-meta-json last;
+
+  location = /.well-known/carddav {
+      return 301 \$scheme://\$host/nextcloud/remote.php/dav;
+  }
+
+  location = /.well-known/caldav {
+      return 301 \$scheme://\$host/nextcloud/remote.php/dav;
+  }
+
+  location /.well-known/acme-challenge { }
+
+  location ^~ /nextcloud {
+      # set max upload size
+      client_max_body_size 10G;
+      fastcgi_buffers 64 4K;
+
+      # Enable gzip but do not remove ETag headers
+      gzip on;
+      gzip_vary on;
+      gzip_comp_level 4;
+      gzip_min_length 256;
+      gzip_proxied expired no-cache no-store private no_last_modified no_etag auth;
+      gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
+
+      # Uncomment if your server is build with the ngx_pagespeed module
+      # This module is currently not supported.
+      #pagespeed off;
+
+      location /nextcloud {
+          rewrite ^ /nextcloud/index.php\$uri;
+      }
+
+      location ~ ^/nextcloud/(?:build|tests|config|lib|3rdparty|templates|data)/ {
+          deny all;
+      }
+
+      location ~ ^/nextcloud/(?:\.|autotest|occ|issue|indie|db_|console) {
+          deny all;
+      }
+
+      location ~ ^/nextcloud/(?:index|remote|public|cron|core/ajax/update|status|ocs/v[12]|updater/.+|ocs-provider/.+|core/templates/40[34])\.php(?:\$|/) {
+          include fastcgi_params;
+          fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+          fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+          fastcgi_param PATH_INFO \$fastcgi_path_info;
+          # Avoid sending the security headers twice
+          fastcgi_param modHeadersAvailable true;
+          fastcgi_param front_controller_active true;
+          fastcgi_pass php-handler;
+          fastcgi_intercept_errors on;
+
+          # Raise timeout values.
+          # This is especially important when the Nextcloud setup runs into timeouts (504 gateway errors)
+          fastcgi_read_timeout 600;
+          fastcgi_send_timeout 600;
+          fastcgi_connect_timeout 600;
+          fastcgi_request_buffering off;
+
+          # Pass PHP variables directly to PHP.
+          # This is usually done in the php.ini. For more flexibility, these variables are configured in the nginx config.
+          # All the PHP parameters have to be set in one fastcgi_param. When using more 'fastcgi_param PHP_VALUE' directives, the last one will override all the others.
+          fastcgi_param PHP_VALUE \"open_basedir=/var/www:/tmp/:/var/nextcloud_data:/dev/urandom:/proc/meminfo
+          upload_max_filesize = 10G
+          post_max_size = 10G
+          max_execution_time = 3600
+          output_buffering = off\";
+
+          # Make sure that the real IP of the remote host is passed to PHP.
+          fastcgi_param REMOTE_ADDR \$http_x_real_ip;
+      }
+
+      location ~ ^/nextloud/(?:updater|ocs-provider)(?:\$|/) {
+          try_files \$uri/ =404;
+          index index.php;
+      }
+
+      # Adding the cache control header for js and css files
+      # Make sure it is BELOW the PHP block
+      location ~* \.(?:css|js)\$ {
+          try_files \$uri /nextcloud/index.php\$uri\$is_args\$args;
+          proxy_set_header Cache-Control \"public, max-age=7200\";
+          # Add headers to serve security related headers
+          # Again use 'proxy_set_header' (not 'add_header') as the headers have to be passed through a proxy.
+          proxy_set_header Strict-Transport-Security \"max-age=15768000; includeSubDomains; preload;\";
+          proxy_set_header X-Content-Type-Options nosniff;
+          #proxy_set_header X-Frame-Options \"SAMEORIGIN\";
+          proxy_set_header X-XSS-Protection \"1; mode=block\";
+          proxy_set_header X-Robots-Tag none;
+          proxy_set_header X-Download-Options noopen;
+          proxy_set_header X-Permitted-Cross-Domain-Policies none;
+          # Optional: Don't log access to assets
+          access_log off;
+      }
+
+      location ~* \.(?:svg|gif|png|html|ttf|woff|ico|jpg|jpeg)\$ {
+          try_files \$uri /nextcloud/index.php\$uri\$is_args\$args;
+          # Optional: Don't log access to other assets
+          access_log off;
+      }
+  }
+}" > "${NGINX_NEXTCLOUD_CONFFILE}"
     echo "Changes to ${NGINX_NEXTCLOUD_CONFFILE}"
     cat "${NGINX_NEXTCLOUD_CONFFILE}"
 
@@ -663,7 +672,7 @@ function install_nextcloud {
     fi
     echo "Step: ${FUNCNAME[0]}"
 
-    echo "Please visit https://nextcloud.com/install/#instructions-server and download recent tar.bz2."
+    echo "Please visit https://nextcloud.com/install/#instructions-server and download the recent tar.bz2."
     echo "Save the archive to ${SCRIPT_DIR}."
     read -p "When finished press any key to continue."
     cd "${SCRIPT_DIR}"
@@ -705,7 +714,14 @@ function configure_nextcloud {
 
     # make sure /var/nextcloud_data is pointing to mount point with fstab user privileges
     umount ${VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA}
-    mount ${VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA}
+    systemctl start ${SYSTEMD_MOUNT_UNIT_NAME}
+    CHECK=$(systemctl status media-sfclouddata.mount | grep "active (mounted)")
+    if [ ! -z "${CHECK}" ]; then
+        echo "Shared folder ${MOUNTPOINTVBOXFS} is active."
+    else
+        echo "Shared folder ${MOUNTPOINTVBOXFS} is NOT ACTIVE. Aborting installation to protect you from wrong nextcloud data location."
+        exit 1
+    fi
     
     # config.php is created when the website is called for the first time
     echo "When setting up nextcloud, please use those values:"
