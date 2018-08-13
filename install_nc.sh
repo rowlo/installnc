@@ -621,7 +621,7 @@ server {
           fastcgi_param REMOTE_ADDR \$http_x_real_ip;
       }
 
-      location ~ ^/nextloud/(?:updater|ocs-provider)(?:\$|/) {
+      location ~ ^/nextcloud/(?:updater|ocs-provider)(?:\$|/) {
           try_files \$uri/ =404;
           index index.php;
       }
