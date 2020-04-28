@@ -1,3 +1,11 @@
+2020-04-26:
+- Adapted script to Kubuntu 20.04 LTS
+- Added creation of status.sh script to check mount status of shared folder
+- Fixed fail2ban service start error due to missing log file
+- Made PHP version configurable
+- Made sure shared folder is mounted in the install steps
+- Worked around nextcloud bug (data directory cannot be a symlink at the moment)
+
 2018-07-16:
 - Fixed severe bug: Data folder was not the shared folder from VirtualBox but a VM internal folder. That potentially flooded the VM disk to its limit.
 - Adapted script for Kubuntu 18.04 LTS

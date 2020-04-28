@@ -12,14 +12,21 @@
 # Original author of that script: Robert Wloch (robert@rowlo.de)
 
 SERVER_DOMAIN_NAME="your-dyndns-domain.com"
-
 VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA="cloud-data"
 MOUNTPOINTVBOXFS="/media/sfclouddata"
+PHP_VERSION="7.4"
+MCRYPT_VERSION="1.0.3"
 
-PHP_VERSION="7.2"
 NGINX_GATEWAY_CONFFILE="/etc/nginx/conf.d/${SERVER_DOMAIN_NAME}.conf"
 NGINX_LETSENCRYPT_CONFFILE="/etc/nginx/conf.d/${SERVER_DOMAIN_NAME}_letsencrypt.conf"
 NGINX_NEXTCLOUD_CONFFILE="/etc/nginx/conf.d/${SERVER_DOMAIN_NAME}_nextcloud.conf"
+
+# https://unix.stackexchange.com/a/345518
+SYSTEMD_MOUNT_UNIT_NAME=`systemd-escape -p --suffix=mount "${MOUNTPOINTVBOXFS}"`
+# https://unix.stackexchange.com/questions/335609/how-to-mount-shared-folder-from-virtualbox-at-boot-time-in-debian
+# https://www.freedesktop.org/software/systemd/man/systemd.mount.html
+SYSTEMD_MOUNT="/lib/systemd/system/${SYSTEMD_MOUNT_UNIT_NAME}"
+SYSTEMD_MOUNT_LINK="/etc/systemd/system/multi-user.target.wants/${SYSTEMD_MOUNT_UNIT_NAME}"
 
 CURRENT_DIR=`pwd`
 SCRIPT_DIR=`dirname "$(realpath $0)"`
@@ -44,7 +51,8 @@ function update_vim_dkms_ssh {
     echo "Update the system and install basic tools..."
     apt-get -yq update && apt-get -yq upgrade -V && apt-get -yq dist-upgrade && apt-get -yq autoremove
     echo "Install vim, dkms (needed for Virtual Box), openssh-server..."
-    apt-get -yq install vim dkms openssh-server
+    apt-get -yq install vim dkms build-essential module-assistant openssh-server
+    m-a prepare
     
     echo "Now copy pub ssh key to that server and test that ssh login works without password. To copy the key use:"
     echo "ssh-copy-id ${SUDO_USER}@${HOSTNAME}"
@@ -90,18 +98,14 @@ function vbox_additions {
 
     echo "Make sure your VM is assigned a shared folder \"${VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA}\" and that the folder contains a folder \"nextcloud_data\". The shared folder MUST NOT auto mount at system startup!"
     read -p "Press any key to continue or CTRL+C to abort if the shared folder is not prepared yet."
-    ln -s "${MOUNTPOINTVBOXFS}/nextcloud_data" /var/nextcloud_data
     mkdir -p "${MOUNTPOINTVBOXFS}"
     chown www-data:www-data "${MOUNTPOINTVBOXFS}"
+    ln -s "${MOUNTPOINTVBOXFS}/nextcloud_data" /var/nextcloud_data
 
     WWWDATA_UID=`cat /etc/passwd | grep www-data | cut -d ':' -f 3`
     WWWDATA_GID=`cat /etc/group | grep www-data | cut -d ':' -f 3`
-    # https://unix.stackexchange.com/a/345518
-    SYSTEMD_MOUNT_UNIT_NAME=`systemd-escape -p --suffix=mount "${MOUNTPOINTVBOXFS}"`
-    # https://unix.stackexchange.com/questions/335609/how-to-mount-shared-folder-from-virtualbox-at-boot-time-in-debian
-    # https://www.freedesktop.org/software/systemd/man/systemd.mount.html
-    SYSTEMD_MOUNT="/etc/systemd/system/${SYSTEMD_MOUNT_UNIT_NAME}"
     touch "${SYSTEMD_MOUNT}"
+    ln -s "${SYSTEMD_MOUNT}" "${SYSTEMD_MOUNT_LINK}"
     echo "[Unit]
 Requires=vboxadd-service.service
 After=vboxadd-service.service
@@ -115,7 +119,6 @@ Options=umask=0007,uid=${WWWDATA_UID},gid=${WWWDATA_GID}
 [Install]
 WantedBy = multi-user.target
 " > "${SYSTEMD_MOUNT}"
-    systemctl enable ${SYSTEMD_MOUNT_UNIT_NAME}
 
     read -p "Please insert the VirtualBox GuestAddtions and mount the drive now. When ready, press any key to continue..."
     VBOXADDITIONS=`ls /media/${SUDO_USER}/ | grep VBox_GAs`
@@ -169,11 +172,11 @@ function install_php {
     fi
     echo "Step: ${FUNCNAME[0]}"
 
-    apt-get -yq install php${PHP_VERSION}-fpm php${PHP_VERSION}-gd php${PHP_VERSION}-mysql php${PHP_VERSION}-curl php${PHP_VERSION}-xml php${PHP_VERSION}-zip php${PHP_VERSION}-intl php${PHP_VERSION}-mbstring php${PHP_VERSION}-bz2 php-apcu
+    apt-get -yq install php${PHP_VERSION}-fpm php${PHP_VERSION}-gd php${PHP_VERSION}-mysql php${PHP_VERSION}-curl php${PHP_VERSION}-xml php${PHP_VERSION}-zip php${PHP_VERSION}-intl php${PHP_VERSION}-mbstring php${PHP_VERSION}-bz2 php-apcu php-imagick
     # https://github.com/s3inlc/hashtopolis/issues/373
-    apt-get -yq install libmcrypt-dev php${PHP_VERSION}-dev
-    read -p "The following build will prompt for a libmcrypt prefix. Just press enter and go with the default."
-    pecl install mcrypt-1.0.1
+    apt install libmcrypt-dev php${PHP_VERSION}-dev
+    read -p "The following build might prompt for a libmcrypt prefix. Just press enter and go with the default."
+    pecl install mcrypt-${MCRYPT_VERSION}
 
     cd "${SCRIPT_DIR}"
     touch FINISHED.${SCRIPT}.${FUNCNAME[0]}
@@ -198,7 +201,7 @@ function configure_php {
     sed -i -e '/^user =/c\user = www-data' "${WWW_CONF}"
     sed -i -e '/^group =/c\group = www-data' "${WWW_CONF}"
     # enable socket configuration
-    sed -i -e '/^listen =/c\listen = \/run\/php\/php${PHP_VERSION}-fpm.sock' "${WWW_CONF}"
+    sed -i -e "/^listen =/c\listen = \/run\/php\/php${PHP_VERSION}-fpm.sock" "${WWW_CONF}"
     # enable env entries (required by nextcloud
     sed -i -e 's/;env\[/env\[/g' "${WWW_CONF}"
     echo "Changes to ${WWW_CONF}"
@@ -211,24 +214,25 @@ function configure_php {
     else
         cp "${PHP_INI}.original" "${PHP_INI}"
     fi
-    sed -i -e '/^;cgi.fix_pathinfo=/c\cgi.fix_pathinfo = 0' "${PHP_INI}"
-    sed -i -e '/^cgi.fix_pathinfo=/c\cgi.fix_pathinfo = 0' "${PHP_INI}"
+    sed -i -e '/^;cgi.fix_pathinfo =/c\cgi.fix_pathinfo = 0' "${PHP_INI}"
+    sed -i -e '/^cgi.fix_pathinfo =/c\cgi.fix_pathinfo = 0' "${PHP_INI}"
     sed -i -e '/^;open_basedir =/c\open_basedir = \/var\/www\/:\/tmp\/' "${PHP_INI}"
     sed -i -e '/^open_basedir =/c\open_basedir = \/var\/www\/:\/tmp\/' "${PHP_INI}"
-    sed -i -e '/^;opcache.enable=/c\opcache.enable = 1' "${PHP_INI}"
-    sed -i -e '/^opcache.enable=/c\opcache.enable = 1' "${PHP_INI}"
-    sed -i -e '/^;opcache.enable_cli=/c\opcache.enable_cli = 1' "${PHP_INI}"
-    sed -i -e '/^opcache.enable_cli=/c\opcache.enable_cli = 1' "${PHP_INI}"
-    sed -i -e '/^;opcache.memory_consumption=/c\opcache.memory_consumption = 128' "${PHP_INI}"
-    sed -i -e '/^opcache.memory_consumption=/c\opcache.memory_consumption = 128' "${PHP_INI}"
-    sed -i -e '/^;opcache.interned_strings_buffer=/c\opcache.interned_strings_buffer = 8' "${PHP_INI}"
-    sed -i -e '/^opcache.interned_strings_buffer=/c\opcache.interned_strings_buffer = 8' "${PHP_INI}"
-    sed -i -e '/^;opcache.max_accelerated_files=/c\opcache.max_accelerated_files = 10000' "${PHP_INI}"
-    sed -i -e '/^opcache.max_accelerated_files=/c\opcache.max_accelerated_files = 10000' "${PHP_INI}"
-    sed -i -e '/^;opcache.revalidate_freq=/c\opcache.revalidate_freq = 1' "${PHP_INI}"
-    sed -i -e '/^opcache.revalidate_freq=/c\opcache.revalidate_freq = 1' "${PHP_INI}"
-    sed -i -e '/^;opcache.save_comments=/c\opcache.save_comments = 1' "${PHP_INI}"
-    sed -i -e '/^opcache.save_comments=/c\opcache.save_comments = 1' "${PHP_INI}"
+    sed -i -e '/^;opcache.enable =/c\opcache.enable = 1' "${PHP_INI}"
+    sed -i -e '/^opcache.enable =/c\opcache.enable = 1' "${PHP_INI}"
+    sed -i -e '/^;opcache.enable_cli =/c\opcache.enable_cli = 1' "${PHP_INI}"
+    sed -i -e '/^opcache.enable_cli =/c\opcache.enable_cli = 1' "${PHP_INI}"
+    sed -i -e '/^;opcache.memory_consumption =/c\opcache.memory_consumption = 128' "${PHP_INI}"
+    sed -i -e '/^opcache.memory_consumption =/c\opcache.memory_consumption = 128' "${PHP_INI}"
+    sed -i -e '/^;opcache.interned_strings_buffer =/c\opcache.interned_strings_buffer = 8' "${PHP_INI}"
+    sed -i -e '/^opcache.interned_strings_buffer =/c\opcache.interned_strings_buffer = 8' "${PHP_INI}"
+    sed -i -e '/^;opcache.max_accelerated_files =/c\opcache.max_accelerated_files = 10000' "${PHP_INI}"
+    sed -i -e '/^opcache.max_accelerated_files =/c\opcache.max_accelerated_files = 10000' "${PHP_INI}"
+    sed -i -e '/^;opcache.revalidate_freq =/c\opcache.revalidate_freq = 1' "${PHP_INI}"
+    sed -i -e '/^opcache.revalidate_freq =/c\opcache.revalidate_freq = 1' "${PHP_INI}"
+    sed -i -e '/^;opcache.save_comments =/c\opcache.save_comments = 1' "${PHP_INI}"
+    sed -i -e '/^opcache.save_comments =/c\opcache.save_comments = 1' "${PHP_INI}"
+    sed -i -e '/^memory_limit =/c\memory_limit = -1' "${PHP_INI}"
     sed -i -e '/^;extension=xsl/c\;extension=xsl\nextension=mcrypt.so' "${PHP_INI}"
     echo "Changes to ${PHP_INI}"
     diff "${PHP_INI}.original" "${PHP_INI}" | grep -e '^>'
@@ -240,8 +244,8 @@ function configure_php {
     else
         cp "${CLI_PHP_INI}.original" "${CLI_PHP_INI}"
     fi
-    sed -i -e '/^;cgi.fix_pathinfo=/c\cgi.fix_pathinfo = 0' "${CLI_PHP_INI}"
-    sed -i -e '/^cgi.fix_pathinfo=/c\cgi.fix_pathinfo = 0' "${CLI_PHP_INI}"
+    sed -i -e '/^;cgi.fix_pathinfo =/c\cgi.fix_pathinfo = 0' "${CLI_PHP_INI}"
+    sed -i -e '/^cgi.fix_pathinfo =/c\cgi.fix_pathinfo = 0' "${CLI_PHP_INI}"
     sed -i -e '/^;open_basedir =/c\open_basedir = \/var\/www\/:\/tmp\/:\/var\/nextcloud_data\/' "${CLI_PHP_INI}"
     sed -i -e '/^open_basedir =/c\open_basedir = \/var\/www\/:\/tmp\/:\/var\/nextcloud_data\/' "${CLI_PHP_INI}"
     echo "Changes to ${CLI_PHP_INI}"
@@ -278,6 +282,9 @@ function configure_nginx {
         return
     fi
     echo "Step: ${FUNCNAME[0]}"
+
+    # make sure the shared folder is mounted
+    systemctl start ${SYSTEMD_MOUNT_UNIT_NAME}
 
     # modify global configuration
     NGINX_CONF="/etc/nginx/nginx.conf"
@@ -367,6 +374,9 @@ function install_letsencrypt {
     fi
     echo "Step: ${FUNCNAME[0]}"
 
+    # make sure the shared folder is mounted
+    systemctl start ${SYSTEMD_MOUNT_UNIT_NAME}
+
     apt-get -yq install letsencrypt
     letsencrypt certonly --webroot -w /var/www/letsencrypt -d ${SERVER_DOMAIN_NAME} --rsa-key-size 4096
     
@@ -404,6 +414,9 @@ function configure_nginx_nextcloud {
     fi
     echo "Step: ${FUNCNAME[0]}"
 
+    # make sure the shared folder is mounted
+    systemctl start ${SYSTEMD_MOUNT_UNIT_NAME}
+
     # same as in step configure_nginx
     echo "server {
   listen 80 default_server;
@@ -415,7 +428,7 @@ function configure_nginx_nextcloud {
       proxy_pass http://127.0.0.1:81;
       proxy_redirect off;
   }
-    # now changes for nextcloud
+  # now changes for nextcloud
 
   location / {
       # Enforce HTTPS
@@ -432,9 +445,9 @@ server {
   server_name ${SERVER_DOMAIN_NAME} ${LOCAL_IP};
 
   #
-  # Configure SSL
+  # Configure SSL (deprecated in >= Kubuntu 20.04 LTS)
   #
-  ssl on;
+  #ssl on;
 
   # Certificates used
   ssl_certificate /etc/letsencrypt/live/${SERVER_DOMAIN_NAME}/fullchain.pem;
@@ -484,6 +497,7 @@ server {
   add_header Strict-Transport-Security \"max-age=63072000; includeSubdomains\" always;
   add_header X-Content-Type-Options \"nosniff\" always;
   # Usually this should be \"DENY\", but when hosting sites using frames, it has to be \"SAMEORIGIN\"
+  add_header X-Frame-Options \"SAMEORIGIN\" always;
   add_header Referrer-Policy \"same-origin\" always;
   add_header X-XSS-Protection \"1; mode=block\" always;
   add_header X-Robots-Tag none;
@@ -659,8 +673,12 @@ server {
 
     service nginx restart
 
+    read -p "A reboot is required before installing nextcloud so that systemd does a clean run through php initialization. Press any key to reboot."
+
     cd "${SCRIPT_DIR}"
     touch FINISHED.${SCRIPT}.${FUNCNAME[0]}
+
+    reboot
 }
 
 function install_nextcloud {
@@ -671,6 +689,9 @@ function install_nextcloud {
         return
     fi
     echo "Step: ${FUNCNAME[0]}"
+
+    # make sure the shared folder is mounted
+    systemctl start ${SYSTEMD_MOUNT_UNIT_NAME}
 
     echo "Please visit https://nextcloud.com/install/#instructions-server and download the recent tar.bz2."
     echo "Save the archive to ${SCRIPT_DIR}."
@@ -715,7 +736,16 @@ function configure_nextcloud {
     # make sure /var/nextcloud_data is pointing to mount point with fstab user privileges
     umount ${VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA}
     systemctl start ${SYSTEMD_MOUNT_UNIT_NAME}
-    CHECK=$(systemctl status media-sfclouddata.mount | grep "active (mounted)")
+    SYSD_MOUNT="$(echo ${MOUNTPOINTVBOXFS} | cut -f 2 -d '/')-$(echo ${MOUNTPOINTVBOXFS} | cut -f 3 -d '/')"
+
+    # Creating a status.sh script next to install_nc.sh that allows to health check shared folder mount status
+    echo "#!/bin/sh
+systemctl status ${SYSD_MOUNT}.mount | grep Active
+service nginx status | grep Active
+" > status.sh
+    chmod u+x status.sh
+
+    CHECK=$(systemctl status ${SYSD_MOUNT}.mount | grep "active (mounted)")
     if [ ! -z "${CHECK}" ]; then
         echo "Shared folder ${MOUNTPOINTVBOXFS} is active."
     else
@@ -725,7 +755,13 @@ function configure_nextcloud {
     
     # config.php is created when the website is called for the first time
     echo "When setting up nextcloud, please use those values:"
-    echo "data directory: /var/nextcloud_data"
+
+    # Due to a bug in nextcloud symlinks are currently not working.
+    # See and follow: https://github.com/nextcloud/server/issues/11879
+    # Workaround applied is taken from: https://help.nextcloud.com/t/new-users-fail-first-login-dont-get-default-files-following-symlinks-is-not-allowed/45755/5
+    #echo "data directory: /var/nextcloud_data"
+    echo "data directory: ${MOUNTPOINTVBOXFS}/nextcloud_data"
+
     echo "database user: nextcloud_db_user"
     echo "database: nextcloud_db"
     echo "database server: localhost:3306"
@@ -796,6 +832,7 @@ maxretry=3
 bantime=1800
 logpath=/var/nextcloud_data/nextcloud.log"
     echo "${FAIL2BAN_JAIL_CONTENT}" > "${FAIL2BAN_JAIL}"
+    touch "/var/nextcloud_data/nextcloud.log"
 
     NEXTCLOUD_CONFIG="/var/www/nextcloud/config/config.php"
     # make a backup if not done before
