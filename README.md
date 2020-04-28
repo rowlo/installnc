@@ -22,8 +22,6 @@ Additionally it also utilizes
     - SERVER_DOMAIN_NAME="your-dyndns-domain.com"
     - VIRTUALBOX_SHARED_FOLDER_NAME_NEXTCLOUD_DATA="cloud-data"
     - MOUNTPOINTVBOXFS="/media/sfclouddata"
-    - PHP_VERSION="7.4"
-    - MCRYPT_VERSION="1.0.3"
 2. Prepare a shared folder for your cloud data. If you like, put it in an encrypted container and mount it, e.g. "/media/truecrypt2/cloud-data/nextcloud_data/"
   In the example truecrypt2 is an ext4 file container, "cloud-data" is the shared folder , and "nextcloud_data" is the nextcloud data folder with changable permissions from within the guest.
 3. In VirtualBox create a guest from a [kubuntu-20.04-desktop-amd64.iso](http://cdimage.ubuntu.com/kubuntu/releases/20.04/release/ "kubuntu-20.04-desktop-amd64.iso") and configure the shared folder. Stick to "cloud_data" if you like.
